@@ -8,4 +8,5 @@ pydantic
 langchain
 langchain-community
 langchain-chroma
+langchain-google-genai
 chromadb
