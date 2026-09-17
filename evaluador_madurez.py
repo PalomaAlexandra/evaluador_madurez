@@ -21,11 +21,14 @@ def extraer_id_carpeta(url_o_id: str) -> str:
 
 def obtener_servicio_drive():
     """Autentica y devuelve el servicio de Google Drive API soportando Secrets y local."""
+    SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+    # 1. Buscar en Streamlit Cloud Secrets
     if "gcp_service_account" in st.secrets:
         creds_dict = dict(st.secrets["gcp_service_account"])
         creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-    elif os.path.exists(SERVICE_ACCOUNT_FILE):
-        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    # 2. Buscar en archivo local
+    elif os.path.exists('credentials.json'):
+        creds = Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
     else:
         raise FileNotFoundError("No se encontraron las credenciales de Google Service Account.")
         
