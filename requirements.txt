@@ -6,4 +6,6 @@ google-auth-httplib2
 google-auth-oauthlib
 pydantic
 langchain
+langchain-community
+langchain-chroma
 chromadb
