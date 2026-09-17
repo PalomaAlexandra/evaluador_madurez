@@ -1,33 +1,61 @@
-import streamlit as st
-from datetime import datetime
-from memory_manager import ModernMemoryManager, UserManager
-from chatbot import ChatbotManager
-
-# Para acceder a google drive  
 import os
+import json
 import socket
+from datetime import datetime
 from pathlib import Path
 
-# Fuerza IPv4 deshabilitando IPv6
-socket.has_ipv6 = False
-
-# Monkeypatch para forzar IPv4
-import socket as socket_module
-original_getaddrinfo = socket_module.getaddrinfo
-
-def ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-    return original_getaddrinfo(host, port, socket_module.AF_INET, type, proto, flags)
-
-socket_module.getaddrinfo = ipv4_only_getaddrinfo
-
+import streamlit as st
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
-# IDs de Google Drive
+# Fuerza IPv4 deshabilitando IPv6 para conexiones de red estables
+socket.has_ipv6 = False
+original_getaddrinfo = socket.getaddrinfo
+
+def ipv4_only_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    return original_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+socket.getaddrinfo = ipv4_only_getaddrinfo
+
+# Importaciones del proyecto
+from memory_manager import ModernMemoryManager, UserManager
+from chatbot import ChatbotManager
+from evaluador_madurez import procesar_evaluacion_madurez_auditada, extraer_id_carpeta
+from utils import (
+    format_timestamp,
+    truncate_text,
+    validate_user_id,
+    get_memory_category_icon
+)
+from config import PAGE_TITLE, PAGE_ICON
+
+# IDs por defecto de Google Drive
 FOLDER_ID_BASE_CONOCIMIENTO = "1ifvN0roOVTzQHo31T7wQZhXB57pv5c5s"
 EXCEL_FILE_ID = "1IDc4m9YXBfDI28FSSbMssD-vwJivxPH-"
 
-from evaluador_madurez import procesar_evaluacion_madurez_auditada, extraer_id_carpeta
+# Configuración inicial de la página de Streamlit
+st.set_page_config(
+    page_title=PAGE_TITLE,
+    page_icon=PAGE_ICON,
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+def obtener_servicio_drive():
+    """Obtiene el cliente de la API de Google Drive soportando autenticación híbrida (Streamlit Secrets o credentials.json local)."""
+    SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+    
+    # 1. Prioridad: Leer de Streamlit Cloud Secrets
+    if "gcp_service_account" in st.secrets:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    # 2. Respaldo local: Leer de credentials.json
+    elif os.path.exists("credentials.json"):
+        creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
+    else:
+        raise FileNotFoundError("No se encontraron credenciales válidas de Google Cloud Service Account.")
+        
+    return build('drive', 'v3', credentials=creds)
 
 def obtener_archivos_recursivo(folder_id, service, ruta_padre="Base de conocimiento"):
     """Recorre recursivamente todas las subcarpetas y extrae ÚNICAMENTE archivos finales."""
@@ -56,16 +84,8 @@ def obtener_archivos_recursivo(folder_id, service, ruta_padre="Base de conocimie
 
 def obtener_conteo_y_archivos(folder_id=FOLDER_ID_BASE_CONOCIMIENTO):
     """Consulta la API de Google Drive y formatea la lista de documentos normativos."""
-    SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
-    SERVICE_ACCOUNT_FILE = 'credentials.json'
-
-    if not os.path.exists(SERVICE_ACCOUNT_FILE):
-        return 0, "No se encontró el archivo credentials.json."
-
     try:
-        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-        service = build('drive', 'v3', credentials=creds)
-
+        service = obtener_servicio_drive()
         files = obtener_archivos_recursivo(folder_id, service)
         total_archivos = len(files)
 
@@ -80,24 +100,8 @@ def obtener_conteo_y_archivos(folder_id=FOLDER_ID_BASE_CONOCIMIENTO):
     except Exception as e:
         return 0, f"Error al conectar con Google Drive: {str(e)}"
 
-from utils import (
-    format_timestamp,
-    truncate_text,
-    validate_user_id,
-    get_memory_category_icon
-)
-from config import PAGE_TITLE, PAGE_ICON
-
-# Configuración de la página
-st.set_page_config(
-    page_title=PAGE_TITLE,
-    page_icon=PAGE_ICON,
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
 def init_session_state():
-    """Inicializa el estado de la sesión"""
+    """Inicializa el estado de la sesión de Streamlit"""
     if 'current_user' not in st.session_state:
         st.session_state.current_user = None
     if 'current_chat' not in st.session_state:
@@ -114,7 +118,7 @@ def init_session_state():
         st.session_state.repo_ea_url = ""
 
 def user_selection_sidebar():
-    """Sidebar para selección/creación de usuarios y repositorios"""
+    """Sidebar para selección/creación de usuarios y configuración de repositorios"""
     st.sidebar.header("👤 Usuario")
     
     existing_users = UserManager.get_users()
@@ -174,7 +178,7 @@ def user_selection_sidebar():
         st.session_state.repo_ea_url = url_input
 
 def chat_history_sidebar():
-    """Sidebar estilo ChatGPT con historial de chats"""
+    """Sidebar estilo ChatGPT con historial de conversaciones"""
     if not st.session_state.current_user:
         return
     
@@ -231,7 +235,7 @@ def chat_history_sidebar():
         st.sidebar.info("No hay chats todavía.\nHaz clic en 'Nuevo Chat' para comenzar.")
 
 def process_user_message(user_input: str):
-    """Procesa el mensaje integrando Base de Conocimiento, Repositorio EA y Auditoría del Excel."""
+    """Procesa el mensaje del usuario integrando Base de Conocimiento, Repositorio EA y Auditoría del Excel."""
     
     with st.chat_message("user"):
         st.write(user_input)
@@ -253,7 +257,6 @@ def process_user_message(user_input: str):
                 repo_id_dinamico = st.session_state.get('repo_ea_url', '')
                 reporte_auditado = procesar_evaluacion_madurez_auditada(EXCEL_FILE_ID, repo_id_dinamico)
                 
-                import json
                 contexto_completo = (
                     f"\n\n[1. MARCOS NORMATIVOS Y BASE DE CONOCIMIENTO DISPONIBLE]\n"
                     f"Total de documentos teóricos: {total_normas}\n"
@@ -278,7 +281,7 @@ def process_user_message(user_input: str):
             )
             prompt_final = f"{user_input}\n{contexto_drive}"
 
-    # 3. CONSULTA AL MODELO
+    # 3. CONSULTA AL MODELO Y RESPUESTA
     with st.spinner("Generando diagnóstico y análisis cruzado..."):
         response = st.session_state.chatbot.chat(prompt_final, st.session_state.current_chat)
     
@@ -319,7 +322,7 @@ def process_user_message(user_input: str):
         st.error(f"Error: {response['error']}")
 
 def main_chat_interface():
-    """Interfaz principal de chat"""
+    """Interfaz principal de conversación"""
     if not st.session_state.current_user:
         st.title(PAGE_TITLE)
         st.info("👈 Selecciona tu usuario en la barra lateral para recuperar tu sesión")
@@ -388,7 +391,7 @@ def main_chat_interface():
         process_user_message(user_input)
 
 def show_memory_interface(container=st):
-    """Interfaz para mostrar memorias vectoriales"""
+    """Interfaz para inspeccionar memorias vectoriales persistentes"""
     container.subheader("🧠 Memoria Vectorial")
     if container.button("Cerrar", key="close_memories"):
         st.session_state.show_memories = False
@@ -447,7 +450,7 @@ def show_memory_interface(container=st):
                 st.caption(f"**Fecha:** {format_timestamp(timestamp)}")
 
 def main():
-    """Función principal de la aplicación"""
+    """Función principal de arranque de la app"""
     init_session_state()
     user_selection_sidebar()
     

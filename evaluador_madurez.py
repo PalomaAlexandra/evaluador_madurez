@@ -2,6 +2,7 @@ import io
 import os
 import re
 import pandas as pd
+import streamlit as st
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
@@ -19,10 +20,15 @@ def extraer_id_carpeta(url_o_id: str) -> str:
     return url_o_id.strip()
 
 def obtener_servicio_drive():
-    """Autentica y devuelve el servicio de Google Drive API."""
-    if not os.path.exists(SERVICE_ACCOUNT_FILE):
-        raise FileNotFoundError("No se encontró el archivo credentials.json")
-    creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    """Autentica y devuelve el servicio de Google Drive API soportando Secrets y local."""
+    if "gcp_service_account" in st.secrets:
+        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    elif os.path.exists(SERVICE_ACCOUNT_FILE):
+        creds = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    else:
+        raise FileNotFoundError("No se encontraron las credenciales de Google Service Account.")
+        
     return build('drive', 'v3', credentials=creds)
 
 def buscar_archivos_recursivo(folder_id: str, service, ruta_acumulada=""):
